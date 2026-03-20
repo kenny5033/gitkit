@@ -1,6 +1,8 @@
+from base64 import b64encode
+from functools import reduce
 import re
-from typing import Annotated, Optional, Tuple
-from git import Repo
+from typing import Annotated, List, Optional, Tuple
+from git import Head, Repo
 import typer
 
 app = typer.Typer()
@@ -8,8 +10,9 @@ app = typer.Typer()
 part_name_regex = re.compile(r"(.*)-p(\d+(?:\.\d*)?)")
 
 
-def part_tag(part: float) -> str:
-    return f"part-{part}-base"
+def part_tag(series_name: str, part: float) -> str:
+    base64_name = b64encode(series_name.encode())
+    return f"p{part}-base({base64_name.decode()})"
 
 
 def generate_part_name(name: str, part: float) -> str:
@@ -27,7 +30,7 @@ def construct_base(series_name: str, part: float):
     repo = Repo(".")
 
     repo.git.commit(allow_empty=True, m=f"(gitkit) init {series_name} part {part}")
-    repo.create_tag(part_tag(part), force=True)
+    repo.create_tag(part_tag(series_name, part), force=True)
 
 
 def make_part(
@@ -83,13 +86,36 @@ def makepart(
     make_part(part, last_commit)
 
 
+def get_parts_in_series(series_name: str) -> List[float]:
+    repo = Repo(".")
+
+    def filter_heads(head: Head):
+        return head.name.startswith(series_name)
+
+    def map_heads(head: Head):
+        _, part = parse_part_name(head.name)
+        return part
+
+    parts = list(map(map_heads, filter(filter_heads, repo.heads)))
+    parts.sort()
+
+    return parts
+
+
 def rebase_part(onto: str):
     (repo := Repo(".")).git.fetch()
 
     part_name = repo.head.reference.name
-    name, part = parse_part_name(part_name)
+    name, current_part = parse_part_name(part_name)
 
-    repo.git.rebase(part_tag(part), onto=onto)
+    parts = get_parts_in_series(name)
+    unmerged_dependencies = [part for part in parts if int(part) < int(current_part)]
+
+    assert len(unmerged_dependencies) == 0, (
+        f"There are parts this part relies on that have not been closed: {unmerged_dependencies}"
+    )
+
+    repo.git.rebase(part_tag(name, current_part), onto=onto)
 
 
 @app.command(help="Rebase the current part")
