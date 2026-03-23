@@ -2,7 +2,7 @@ from base64 import b64encode
 from functools import reduce
 import re
 from typing import Annotated, List, Optional, Tuple
-from git import Head, Repo
+from git import GitCommandError, Head, Repo
 import typer
 
 app = typer.Typer()
@@ -115,7 +115,10 @@ def rebase_part(onto: str):
         f"There are parts this part relies on that have not been closed: {unmerged_dependencies}"
     )
 
-    repo.git.rebase(part_tag(name, current_part), onto=onto)
+    try:
+        repo.git.rebase(part_tag(name, current_part), onto=onto)
+    except GitCommandError as e:
+        print(e.stderr)
 
 
 @app.command(help="Rebase the current part")
