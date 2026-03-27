@@ -19,7 +19,7 @@ def series_tag(name: str) -> str:
 
 
 def start_series(name: str, *, exists_ok: bool = False, force: bool = False):
-    from gitkit.parts import parse_part_name, make_part
+    from gitkit.parts import make_part, is_part_name_valid
 
     repo = Repo(".")
 
@@ -33,12 +33,9 @@ def start_series(name: str, *, exists_ok: bool = False, force: bool = False):
 
     old_head = repo.head.reference
 
-    try:
-        # if it is a gitkit head, mark it as a series dependency
-        parse_part_name(old_head.name)
+    # if it is a gitkit head, mark it as a series dependency
+    if is_part_name_valid(old_head.name):
         series_info.dependent_on = old_head.name
-    except AssertionError:
-        pass
 
     series_head = repo.create_head(name)
     series_head.checkout()
@@ -75,7 +72,7 @@ def startseries(
         typer.Option(
             "--force", "-f", help="Whether to force the creation of this series"
         ),
-    ],
+    ] = False,
 ):
     start_series(name, force=force)
 

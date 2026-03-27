@@ -20,6 +20,10 @@ def generate_part_name(name: str, part: float) -> str:
     return f"{name}-p{part}"
 
 
+def is_part_name_valid(part_name: str) -> bool:
+    return bool(re.fullmatch(part_name_regex, part_name))
+
+
 def parse_part_name(part_name: str) -> Tuple[str, float]:
     match = re.fullmatch(part_name_regex, part_name)
 
@@ -108,7 +112,7 @@ def get_parts_in_series(series_name: str) -> List[float]:
     return parts
 
 
-def rebase_part(onto: str):
+def rebase_part(onto: str, *, context_only: bool = False):
     from gitkit.series import get_series_info
 
     (repo := Repo(".")).git.fetch()
@@ -124,6 +128,21 @@ def rebase_part(onto: str):
         f"There are unclosed parts which come before this part: {unmerged_dependencies}",
     )
 
+    if context_only:
+        try:
+            tag = get_current_part()
+        except IndexError:
+            merge_base_sha = repo.git.merge_base(onto, part_name)
+
+            try:
+                repo.git.rebase(merge_base_sha, onto=onto)
+            except GitCommandError as e:
+                gitkit_bail(True, e.stderr)
+        else:
+            gitkit_bail(True, "This part's base has not yet been rebased")
+
+        return
+
     series_dependency: str | None = get_series_info().get("dependent_on")
     if series_dependency is not None:
         gitkit_bail(
@@ -132,9 +151,16 @@ def rebase_part(onto: str):
         )
 
     try:
-        repo.git.rebase(part_tag(name, current_part), onto=onto)
+        tag = get_current_part()
+        repo.git.rebase(tag, onto=onto)
+        repo.delete_tag(tag)
     except GitCommandError as e:
-        print(e.stderr)
+        gitkit_bail(True, e.stderr)
+    except IndexError:
+        gitkit_bail(
+            True,
+            "Could not find the current part's tag. Perhaps it is already rebased?",
+        )
 
 
 @dataclass
@@ -204,8 +230,15 @@ def rebase(
         str,
         typer.Argument(..., help="The onto argument for the rebase"),
     ] = "origin/master",
+    context: Annotated[
+        bool,
+        typer.Option(
+            ...,
+            help="Rebase the current part's default context ('onto' will probably be your default branch)",
+        ),
+    ] = False,
 ):
-    rebase_part(onto)
+    rebase_part(onto, context_only=context)
 
 
 @app.command(help="Get stats on lines changed", rich_help_panel="Parts")
