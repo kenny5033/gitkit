@@ -43,11 +43,14 @@ def construct_base(series_name: str, part: float):
     repo.create_tag(part_tag(series_name, part), force=True)
 
 
-def get_current_part() -> TagReference:
+def get_current_part() -> TagReference | None:
     repo = Repo(".")
 
     name, part = parse_part_name(repo.head.reference.name)
-    return repo.tags[part_tag(name, part)]
+    if (tag := part_tag(name, part)) in repo.tags:
+        return repo.tags[tag]
+
+    return None
 
 
 def make_part(
@@ -129,9 +132,8 @@ def rebase_part(onto: str, *, context_only: bool = False):
     )
 
     if context_only:
-        try:
-            tag = get_current_part()
-        except IndexError:
+        tag = get_current_part()
+        if tag is None:
             merge_base_sha = repo.git.merge_base(onto, part_name)
 
             try:
@@ -143,24 +145,21 @@ def rebase_part(onto: str, *, context_only: bool = False):
 
         return
 
-    series_dependency: str | None = get_series_info().get("dependent_on")
-    if series_dependency is not None:
+    series_dependencies = get_series_info().dependent_on
+    for dependency in series_dependencies:
         gitkit_bail(
-            series_dependency in repo.heads,
-            f"Series dependency {series_dependency} has not been closed",
+            dependency in repo.heads,
+            f"Series dependencies {series_dependencies} have not all been closed",
         )
 
     try:
         tag = get_current_part()
+        gitkit_bail(tag is None, "Could not find this part's base")
+
         repo.git.rebase(tag, onto=onto)
         repo.delete_tag(tag)
     except GitCommandError as e:
         gitkit_bail(True, e.stderr)
-    except IndexError:
-        gitkit_bail(
-            True,
-            "Could not find the current part's tag. Perhaps it is already rebased?",
-        )
 
 
 @dataclass
@@ -173,12 +172,16 @@ class PartStats:
         return self.lines_added + self.lines_removed
 
 
-def part_stats(*, up_to: Optional[str] = None):
+def part_stats(*, up_to: Optional[str] = None, fall_back_onto: str) -> PartStats:
     repo = Repo(".")
 
     part = get_current_part()
+    if part is None:
+        base_sha = repo.git.merge_base(fall_back_onto, repo.head.reference.name)
+    else:
+        base_sha = part.commit.hexsha
 
-    diff = repo.git.diff(part.commit.hexsha, up_to, numstat=True, z=True)
+    diff = repo.git.diff(base_sha, up_to, numstat=True, z=True)
 
     total_added = 0
     total_removed = 0
@@ -249,8 +252,15 @@ def partstats(
             ..., help="The commit to go no further than for calculating line stats"
         ),
     ] = None,
+    fall_back_onto: Annotated[
+        str,
+        typer.Option(
+            ...,
+            help="If this part has already been rebased, use this argument as the base of the part",
+        ),
+    ] = "origin/master",
 ):
-    stats = part_stats(up_to=up_to)
+    stats = part_stats(up_to=up_to, fall_back_onto=fall_back_onto)
     print()
     print("Part Stats")
     print("----------")
