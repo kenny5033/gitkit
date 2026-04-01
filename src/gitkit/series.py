@@ -166,6 +166,28 @@ def create_context(other_part_name: str, *, name: Optional[str] = None) -> DataN
     return context_info
 
 
+def prune_tags():
+    repo = Repo(".")
+
+    tags_to_keep = set()
+    for head in repo.heads:
+        tag = None
+
+        part_type = interpret_part_type(part_name=head.name)
+        if part_type == PartType.PART:
+            from .parts import part_tag, parse_part_name
+
+            series_name, part = parse_part_name(head.name)
+            tag = part_tag(series_name, part)
+        elif part_type == PartType.CONTEXT:
+            tag = head.name
+
+        if tag is not None and tag in repo.tags:
+            tags_to_keep.add(repo.tags[tag])
+
+    repo.delete_tag(*(tag for tag in repo.tags if tag not in tags_to_keep))
+
+
 @app.command(help="Start a new series", rich_help_panel="Series")
 def startseries(
     name: Annotated[str, typer.Argument(help="The name of the series to create")],
@@ -206,3 +228,11 @@ def newcontext(
     ] = None,
 ):
     create_context(other, name=name)
+
+
+@app.command(
+    help="Remove tags that are for parts, series, or contexts which no longer exist",
+    rich_help_panel="Utilities",
+)
+def prune():
+    prune_tags()
