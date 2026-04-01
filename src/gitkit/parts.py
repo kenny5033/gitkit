@@ -116,13 +116,16 @@ def get_parts_in_series(series_name: str) -> List[float]:
 
 
 def rebase_part(onto: str, *, context_only: bool = False):
-    from gitkit.series import load_data_node
+    from .series import load_data_node, interpret_part_type, PartType
 
     (repo := Repo(".")).git.fetch()
 
+    part_type = interpret_part_type()
+    gitkit_bail(part_type == PartType.CONTEXT, "Contexts cannot be rebased")
+    gitkit_bail(part_type != PartType.PART, "This is not a valid gitkit part")
+
     part_name = repo.head.reference.name
     name, current_part = parse_part_name(part_name)
-
     parts = get_parts_in_series(name)
     unmerged_dependencies = [part for part in parts if int(part) < int(current_part)]
 

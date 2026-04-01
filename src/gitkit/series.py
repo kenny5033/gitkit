@@ -1,7 +1,8 @@
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 import json
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Optional, Set
+import uuid
 from git import Repo, TagReference
 from gitkit.utils import gitkit_bail
 import typer
@@ -147,11 +148,7 @@ def create_context(other_part_name: str, *, name: Optional[str] = None) -> DataN
     )
 
     if name is None:
-        chars = (
-            ((ord(a) ^ ord(b)) % (0x7E - 0x21)) + 0x21
-            for a, b in zip(base_part_name, other_part_name)
-        )
-        name = "".join([chr(char) for char in chars])
+        name = str(uuid.uuid4())
 
     save_data_node(context_info, name)
 
@@ -169,21 +166,17 @@ def create_context(other_part_name: str, *, name: Optional[str] = None) -> DataN
 def prune_tags():
     repo = Repo(".")
 
-    tags_to_keep = set()
+    tags_to_keep: Set[str] = set()
     for head in repo.heads:
-        tag = None
-
         part_type = interpret_part_type(part_name=head.name)
         if part_type == PartType.PART:
             from .parts import part_tag, parse_part_name
 
             series_name, part = parse_part_name(head.name)
-            tag = part_tag(series_name, part)
+            tags_to_keep.add(part_tag(series_name, part))
+            tags_to_keep.add(series_tag(series_name))
         elif part_type == PartType.CONTEXT:
-            tag = head.name
-
-        if tag is not None and tag in repo.tags:
-            tags_to_keep.add(repo.tags[tag])
+            tags_to_keep.add(head.name)
 
     repo.delete_tag(*(tag for tag in repo.tags if tag not in tags_to_keep))
 
