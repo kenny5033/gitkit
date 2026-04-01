@@ -116,7 +116,7 @@ def get_parts_in_series(series_name: str) -> List[float]:
 
 
 def rebase_part(onto: str, *, context_only: bool = False):
-    from gitkit.series import get_series_info
+    from gitkit.series import load_data_node
 
     (repo := Repo(".")).git.fetch()
 
@@ -145,7 +145,7 @@ def rebase_part(onto: str, *, context_only: bool = False):
 
         return
 
-    series_dependencies = get_series_info().dependent_on
+    series_dependencies = load_data_node().dependent_on
     for dependency in series_dependencies:
         gitkit_bail(
             dependency in repo.heads,

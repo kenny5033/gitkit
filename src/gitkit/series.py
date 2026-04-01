@@ -1,7 +1,8 @@
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 import json
 from typing import Annotated, List, Optional
-from git import Repo
+from git import Repo, TagReference
 from gitkit.utils import gitkit_bail
 import typer
 
@@ -9,9 +10,75 @@ import typer
 app = typer.Typer()
 
 
+class DataNodeType(int, Enum):
+    SERIES = 0
+    CONTEXT = 1
+
+
 @dataclass
-class SeriesInfo:
+class DataNode:
+    type: DataNodeType
     dependent_on: List[str] = field(default_factory=list)
+
+
+class PartType(int, Enum):
+    PART = 0
+    CONTEXT = 1
+    OTHER = 2  # not gitkit
+
+
+def interpret_part_type(*, part_name: Optional[str] = None) -> PartType:
+    from gitkit.parts import is_part_name_valid
+
+    repo = Repo(".")
+
+    if part_name is None:
+        part_name = repo.head.reference.name
+
+    if is_part_name_valid(part_name):
+        return PartType.PART
+
+    if part_name in repo.tags:
+        return PartType.CONTEXT
+
+    return PartType.OTHER
+
+
+def load_data_node(*, part_name: Optional[str] = None) -> DataNode | None:
+    repo = Repo(".")
+
+    if part_name is None:
+        part_name = repo.head.reference.name
+
+    part_type = interpret_part_type(part_name=part_name)
+
+    if part_type == PartType.PART:
+        from .parts import parse_part_name
+
+        series_name, _ = parse_part_name(part_name)
+        return DataNode(**json.loads(repo.tags[series_tag(series_name)].commit.message))
+
+    if part_type == PartType.CONTEXT:
+        return DataNode(**json.loads(repo.tags[part_name].commit.message))
+
+    return None
+
+
+def save_data_node(node: DataNode, tag_name: str) -> TagReference:
+    repo = Repo(".")
+
+    old_head = repo.head.reference
+    node_head = repo.create_head(tag_name)
+    node_head.checkout()
+
+    info = asdict(node)
+    repo.git.commit("--allow-empty", "-m", json.dumps(info))
+    node_tag = repo.create_tag(tag_name, force=True)
+
+    old_head.checkout()
+    repo.delete_head(node_head, force=True)
+
+    return node_tag
 
 
 def series_tag(name: str) -> str:
@@ -19,7 +86,7 @@ def series_tag(name: str) -> str:
 
 
 def start_series(name: str, *, exists_ok: bool = False, force: bool = False):
-    from gitkit.parts import make_part, is_part_name_valid
+    from gitkit.parts import make_part
 
     repo = Repo(".")
 
@@ -29,42 +96,21 @@ def start_series(name: str, *, exists_ok: bool = False, force: bool = False):
     if not force:
         gitkit_bail(already_exists, f"Series {name} already exists")
 
-    series_info = SeriesInfo()
-
-    old_head = repo.head.reference
+    series_info = DataNode(type=DataNodeType.SERIES)
 
     # if it is a gitkit head, mark it as a series dependency
     # else if it is a context commit, use its dependencies
-    if is_part_name_valid(old_head.name):
-        series_info.dependent_on = [old_head.name]
-    elif old_head.name in repo.tags:
-        # if a head's name is in tags, it is a context
-        context_info = json.loads(old_head.commit.message)
-        series_info.dependent_on = context_info["dependent_on"]
+    current_part_type = interpret_part_type()
+    if current_part_type == PartType.PART:
+        series_info.dependent_on = [repo.head.reference.name]
+    elif current_part_type == PartType.CONTEXT:
+        context_info = load_data_node()
+        gitkit_bail(context_info is None, "Could not find data node for this context")
+        series_info.dependent_on = context_info.dependent_on
 
-    series_head = repo.create_head(name)
-    series_head.checkout()
-
-    info = asdict(series_info)
-    repo.git.commit("--allow-empty", "-m", json.dumps(info))
-    repo.create_tag(series_tag(name), series_head, force=True)
-
-    old_head.checkout()
-    repo.delete_head(series_head, force=True)
+    save_data_node(series_info, series_tag(name))
 
     make_part(1.0, on_series=name)
-
-
-def get_series_info(*, series_name: Optional[str] = None) -> SeriesInfo:
-    from .parts import parse_part_name
-
-    repo = Repo(".")
-
-    if series_name is None:
-        series_name, _ = parse_part_name(repo.head.reference.name)
-
-    info = SeriesInfo(**json.loads(repo.tags[series_tag(series_name)].commit.message))
-    return info
 
 
 def series_exists(name: str) -> bool:
@@ -72,38 +118,45 @@ def series_exists(name: str) -> bool:
     return series_tag(name) in [tag.name for tag in repo.tags]
 
 
-def create_context(other: str, *, name: Optional[str] = None) -> SeriesInfo:
-    from .parts import parse_part_name, is_part_name_valid
-
+def create_context(other_part_name: str, *, name: Optional[str] = None) -> DataNode:
     repo = Repo(".")
 
-    other_name, _ = parse_part_name(other)
+    def get_dependencies(part_name: str) -> List[str]:
+        part_type = interpret_part_type(part_name=part_name)
+        gitkit_bail(
+            part_type == PartType.OTHER,
+            "Cannot make context where the base is not a gitkit managed head. Try making a series instead.",
+        )
+
+        if part_type == PartType.PART:
+            return [part_name]
+        elif part_type == PartType.CONTEXT:
+            node = load_data_node(part_name=part_name)
+            gitkit_bail(node is None, f"Cannot find data node for context {part_name}")
+            return node.dependent_on
+
+        return []
 
     base_part_name = repo.head.reference.name
-    if is_part_name_valid(base_part_name):
-        base_name, _ = parse_part_name(base_part_name)
-        base_info = get_series_info(series_name=base_name)
-        base_dependencies = [base_part_name]
-    else:
-        # the base is a context in of itself
-        base_name = base_part_name
-        base_info = SeriesInfo(**json.loads(repo.head.reference.commit.message))
-        base_dependencies = base_info.dependent_on
 
-    context_info = SeriesInfo(dependent_on=base_dependencies + [other])
-    info = asdict(context_info)
+    base_dependencies = get_dependencies(base_part_name)
+    other_dependencies = get_dependencies(other_part_name)
+
+    context_info = DataNode(
+        type=DataNodeType.CONTEXT, dependent_on=base_dependencies + other_dependencies
+    )
 
     if name is None:
         chars = (
             ((ord(a) ^ ord(b)) % (0x7E - 0x21)) + 0x21
-            for a, b in zip(base_name, other_name)
+            for a, b in zip(base_part_name, other_part_name)
         )
         name = "".join([chr(char) for char in chars])
 
+    save_data_node(context_info, name)
+
     context_head = repo.create_head(name)
     context_head.checkout()
-    repo.git.commit("--allow-empty", "-m", json.dumps(info))
-    repo.create_tag(name, context_head, force=True)
 
     return context_info
 
@@ -122,11 +175,13 @@ def startseries(
 
 
 @app.command(
-    help="Get information stored on the series's information commit",
+    help="Get either: 1) information stored on this part's series's data node or 2) information on this context's data node",
     rich_help_panel="Series",
 )
-def seriesinfo():
-    print(json.dumps(asdict(get_series_info()), indent=2))
+def nodeinfo():
+    node = load_data_node()
+    gitkit_bail(node is None, "Couldn't find data node for the current part")
+    print(json.dumps(asdict(node), indent=2))
 
 
 @app.command(
