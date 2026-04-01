@@ -158,6 +158,11 @@ def create_context(other_part_name: str, *, name: Optional[str] = None) -> DataN
     context_head = repo.create_head(name)
     context_head.checkout()
 
+    repo.git.merge(
+        other_part_name,
+        m=f"(gitkit) context merge {base_part_name} <- {other_part_name}",
+    )
+
     return context_info
 
 
