@@ -1,19 +1,27 @@
 from base64 import b64encode
 from dataclasses import dataclass
 import re
-from typing import Annotated, List, Optional, Tuple
+from typing import List, Optional, Tuple
 from git import GitCommandError, Head, Repo, TagReference
 from gitkit.utils import gitkit_bail
-import typer
 
-app = typer.Typer()
 
 part_name_regex = re.compile(r"(.*)-p(\d+(?:\.\d*)?)")
 
 
+@dataclass
+class PartStats:
+    lines_added: int
+    lines_removed: int
+
+    @property
+    def total_lines_changed(self) -> int:
+        return self.lines_added + self.lines_removed
+
+
 def part_tag(series_name: str, part: float) -> str:
     base64_name = b64encode(series_name.encode())
-    return f"p{part}-base({base64_name.decode()})"
+    return f"(gk)p{part}-base({base64_name.decode()})"
 
 
 def generate_part_name(name: str, part: float) -> str:
@@ -66,12 +74,11 @@ def make_part(
         series_name, prev_part = parse_part_name(part_name)
     else:
         # this call is meant to be manually attached to a series
-        from .series import series_exists
+        from gitkit.logic.series import series_exists, start_series
 
-        gitkit_bail(
-            not series_exists(on_series),
-            f"Cannot attach to series {on_series} because it doesn't exist",
-        )
+        if not series_exists(on_series):
+            start_series(on_series)
+
         series_name, prev_part = on_series, 0
 
     gitkit_bail(part <= prev_part, "The new part must come after the current part")
@@ -116,7 +123,7 @@ def get_parts_in_series(series_name: str) -> List[float]:
 
 
 def rebase_part(onto: str, *, context_only: bool = False):
-    from .series import load_data_node, interpret_part_type, PartType
+    from gitkit.logic.series import load_data_node, interpret_part_type, PartType
 
     (repo := Repo(".")).git.fetch()
 
@@ -165,16 +172,6 @@ def rebase_part(onto: str, *, context_only: bool = False):
         gitkit_bail(True, e.stderr)
 
 
-@dataclass
-class PartStats:
-    lines_added: int
-    lines_removed: int
-
-    @property
-    def total_lines_changed(self) -> int:
-        return self.lines_added + self.lines_removed
-
-
 def part_stats(*, up_to: Optional[str] = None, fall_back_onto: str) -> PartStats:
     repo = Repo(".")
 
@@ -196,78 +193,3 @@ def part_stats(*, up_to: Optional[str] = None, fall_back_onto: str) -> PartStats
         total_removed += int(removed)
 
     return PartStats(lines_added=total_added, lines_removed=total_removed)
-
-
-@app.command(help="Make a new part in the current series", rich_help_panel="Parts")
-def makepart(
-    part: Annotated[
-        float,
-        typer.Argument(
-            ...,
-            help="This branch's *numeric* identifier in a series of stacked branches, e.g. 1 or 2.5",
-        ),
-    ],
-    last_commit: Annotated[
-        Optional[str],
-        typer.Argument(
-            help="The last commit to include before the base of the new part",
-        ),
-    ] = None,
-    series: Annotated[
-        Optional[str],
-        typer.Option(
-            "--series",
-            "-s",
-            help="Manually override the series for this part. Will create the series if it doesn't already exist",
-        ),
-    ] = None,
-):
-    if series is not None:
-        from .series import start_series
-
-        start_series(series, exists_ok=True)
-
-    make_part(part, last_commit, on_series=series)
-
-
-@app.command(help="Rebase the current part", rich_help_panel="Parts")
-def rebase(
-    onto: Annotated[
-        str,
-        typer.Argument(..., help="The onto argument for the rebase"),
-    ] = "origin/master",
-    context: Annotated[
-        bool,
-        typer.Option(
-            ...,
-            help="Rebase the current part's default context ('onto' will probably be your default branch)",
-        ),
-    ] = False,
-):
-    rebase_part(onto, context_only=context)
-
-
-@app.command(help="Get stats on lines changed", rich_help_panel="Parts")
-def partstats(
-    up_to: Annotated[
-        Optional[str],
-        typer.Argument(
-            ..., help="The commit to go no further than for calculating line stats"
-        ),
-    ] = None,
-    fall_back_onto: Annotated[
-        str,
-        typer.Option(
-            ...,
-            help="If this part has already been rebased, use this argument as the base of the part",
-        ),
-    ] = "origin/master",
-):
-    stats = part_stats(up_to=up_to, fall_back_onto=fall_back_onto)
-    print()
-    print("Part Stats")
-    print("----------")
-    print(f"Lines Added:         {stats.lines_added:>5}")
-    print(f"Lines Removed:       {stats.lines_removed:>5}")
-    print(f"Total Lines Changed: {stats.total_lines_changed:>5}")
-    print()

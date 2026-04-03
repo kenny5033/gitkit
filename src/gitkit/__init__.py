@@ -1,6 +1,6 @@
 import typer
-from .parts import app as parts_typer
-from .series import app as series_typer
+from gitkit.commands.parts import app as parts_typer
+from gitkit.commands.series import app as series_typer
 
 
 app = typer.Typer()

@@ -1,14 +1,10 @@
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 import json
-from typing import Annotated, List, Optional, Set
+from typing import List, Optional, Set
 import uuid
-from git import Repo, TagReference
+from git import GitCommandError, Repo, TagReference
 from gitkit.utils import gitkit_bail
-import typer
-
-
-app = typer.Typer()
 
 
 class DataNodeType(int, Enum):
@@ -29,7 +25,7 @@ class PartType(int, Enum):
 
 
 def interpret_part_type(*, part_name: Optional[str] = None) -> PartType:
-    from gitkit.parts import is_part_name_valid
+    from gitkit.logic.parts import is_part_name_valid
 
     repo = Repo(".")
 
@@ -54,7 +50,7 @@ def load_data_node(*, part_name: Optional[str] = None) -> DataNode | None:
     part_type = interpret_part_type(part_name=part_name)
 
     if part_type == PartType.PART:
-        from .parts import parse_part_name
+        from gitkit.logic.parts import parse_part_name
 
         series_name, _ = parse_part_name(part_name)
         return DataNode(**json.loads(repo.tags[series_tag(series_name)].commit.message))
@@ -83,11 +79,15 @@ def save_data_node(node: DataNode, tag_name: str) -> TagReference:
 
 
 def series_tag(name: str) -> str:
-    return f"{name}-series-info"
+    return f"(gk){name}-series-info"
+
+
+def context_tag(name: str) -> str:
+    return f"(gk){name}"
 
 
 def start_series(name: str, *, exists_ok: bool = False, force: bool = False):
-    from gitkit.parts import make_part
+    from gitkit.logic.parts import make_part
 
     repo = Repo(".")
 
@@ -150,15 +150,18 @@ def create_context(other_part_name: str, *, name: Optional[str] = None) -> DataN
     if name is None:
         name = str(uuid.uuid4())
 
-    save_data_node(context_info, name)
+    save_data_node(context_info, context_tag(name))
 
     context_head = repo.create_head(name)
     context_head.checkout()
 
-    repo.git.merge(
-        other_part_name,
-        m=f"(gitkit) context merge {base_part_name} <- {other_part_name}",
-    )
+    try:
+        repo.git.merge(
+            other_part_name,
+            m=f"(gitkit) context merge {base_part_name} <- {other_part_name}",
+        )
+    except GitCommandError as e:
+        print(e.stdout)
 
     return context_info
 
@@ -170,62 +173,15 @@ def prune_tags():
     for head in repo.heads:
         part_type = interpret_part_type(part_name=head.name)
         if part_type == PartType.PART:
-            from .parts import part_tag, parse_part_name
+            from gitkit.logic.parts import part_tag, parse_part_name
 
             series_name, part = parse_part_name(head.name)
             tags_to_keep.add(part_tag(series_name, part))
             tags_to_keep.add(series_tag(series_name))
         elif part_type == PartType.CONTEXT:
-            tags_to_keep.add(head.name)
+            tags_to_keep.add(context_tag(head.name))
 
-    repo.delete_tag(*(tag for tag in repo.tags if tag not in tags_to_keep))
+    print(*(tag for tag in repo.tags if str(tag) in tags_to_keep))
+    return
 
-
-@app.command(help="Start a new series", rich_help_panel="Series")
-def startseries(
-    name: Annotated[str, typer.Argument(help="The name of the series to create")],
-    force: Annotated[
-        bool,
-        typer.Option(
-            "--force", "-f", help="Whether to force the creation of this series"
-        ),
-    ] = False,
-):
-    start_series(name, force=force)
-
-
-@app.command(
-    help="Get either: 1) information stored on this part's series's data node or 2) information on this context's data node",
-    rich_help_panel="Series",
-)
-def nodeinfo():
-    node = load_data_node()
-    gitkit_bail(node is None, "Couldn't find data node for the current part")
-    print(json.dumps(asdict(node), indent=2))
-
-
-@app.command(
-    help="Create a new context head from the combination of the current part and another given part",
-    rich_help_panel="Series",
-)
-def newcontext(
-    other: Annotated[
-        str, typer.Argument(..., help="The other part to combine with the current part")
-    ],
-    name: Annotated[
-        Optional[str],
-        typer.Option(
-            ...,
-            help="The name to give this context, if you'd like to keep better track",
-        ),
-    ] = None,
-):
-    create_context(other, name=name)
-
-
-@app.command(
-    help="Remove tags that are for parts, series, or contexts which no longer exist",
-    rich_help_panel="Utilities",
-)
-def prune():
-    prune_tags()
+    repo.delete_tag(*(tag for tag in repo.tags if str(tag) not in tags_to_keep))

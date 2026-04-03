@@ -1,7 +1,7 @@
 [project]
 name = "gitkit"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "A command line tool for managing git repos through parts, series, and contexts"
 readme = "README.md"
 authors = [
     { name = "Kenneth Howes", email = "kenneth.howes53@gmail.com" }
@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "gitpython>=3.1.46",
+    "pytest>=9.0.2",
     "typer>=0.24.1",
 ]
 
