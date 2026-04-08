@@ -1,9 +1,11 @@
 from base64 import b64encode
 from dataclasses import dataclass
+import os
 import re
+import time
 from typing import List, Optional, Tuple
 from git import GitCommandError, Head, Repo, TagReference
-from gitkit.utils import gitkit_bail
+from gitkit.utils import get_app_repo
 
 
 part_name_regex = re.compile(r"(.*)-p(\d+(?:\.\d*)?)")
@@ -35,24 +37,24 @@ def is_part_name_valid(part_name: str) -> bool:
 def parse_part_name(part_name: str) -> Tuple[str, float]:
     match = re.fullmatch(part_name_regex, part_name)
 
-    gitkit_bail(
-        not match,
-        f"Part name '{part_name}' could not be parsed",
-    )
+    if not match:
+        raise ValueError(
+            f"Part name '{part_name}' could not be parsed",
+        )
 
     name, part = match.groups()
     return name, float(part)
 
 
 def construct_base(series_name: str, part: float):
-    repo = Repo(".")
+    repo = get_app_repo()
 
     repo.git.commit(allow_empty=True, m=f"(gitkit) init {series_name} part {part}")
     repo.create_tag(part_tag(series_name, part), force=True)
 
 
 def get_current_part() -> TagReference | None:
-    repo = Repo(".")
+    repo = get_app_repo()
 
     name, part = parse_part_name(repo.head.reference.name)
     if (tag := part_tag(name, part)) in repo.tags:
@@ -67,7 +69,7 @@ def make_part(
     *,
     on_series: Optional[str] = None,
 ):
-    repo = Repo(".")
+    repo = get_app_repo()
 
     if on_series is None:
         part_name = repo.head.reference.name
@@ -81,13 +83,13 @@ def make_part(
 
         series_name, prev_part = on_series, 0
 
-    gitkit_bail(part <= prev_part, "The new part must come after the current part")
+    if part <= prev_part:
+        raise ValueError("The new part must come after the current part")
 
     # ensure the part name is availabled
     part_name = generate_part_name(series_name, part)
-    gitkit_bail(
-        part_name in [head.name for head in repo.heads], "This part already exists"
-    )
+    if part_name in [head.name for head in repo.heads]:
+        raise ValueError("This part already exists")
 
     new_branch = repo.create_head(part_name, force=True)
 
@@ -107,7 +109,7 @@ def make_part(
 
 
 def get_parts_in_series(series_name: str) -> List[float]:
-    repo = Repo(".")
+    repo = get_app_repo()
 
     def filter_heads(head: Head):
         return head.name.startswith(series_name)
@@ -128,52 +130,56 @@ def rebase_part(onto: str, *, context_only: bool = False):
     (repo := Repo(".")).git.fetch()
 
     part_type = interpret_part_type()
-    gitkit_bail(part_type == PartType.CONTEXT, "Contexts cannot be rebased")
-    gitkit_bail(part_type != PartType.PART, "This is not a valid gitkit part")
+    if part_type == PartType.CONTEXT:
+        raise ValueError("Contexts cannot be rebased")
+    if part_type != PartType.PART:
+        raise ValueError("This is not a valid gitkit part")
 
     part_name = repo.head.reference.name
     name, current_part = parse_part_name(part_name)
     parts = get_parts_in_series(name)
     unmerged_dependencies = [part for part in parts if int(part) < int(current_part)]
 
-    gitkit_bail(
-        len(unmerged_dependencies) > 0,
-        f"There are unclosed parts which come before this part: {unmerged_dependencies}",
-    )
+    if len(unmerged_dependencies) > 0:
+        raise ValueError(
+            f"There are unclosed parts which come before this part: {unmerged_dependencies}"
+        )
 
     if context_only:
         tag = get_current_part()
         if tag is None:
             merge_base_sha = repo.git.merge_base(onto, part_name)
-
-            try:
-                repo.git.rebase(merge_base_sha, onto=onto)
-            except GitCommandError as e:
-                gitkit_bail(True, e.stderr)
+            repo.git.rebase(merge_base_sha, onto=onto)
         else:
-            gitkit_bail(True, "This part's base has not yet been rebased")
+            raise ValueError("This part's base has not yet been rebased")
 
         return
 
     series_dependencies = load_data_node().dependent_on
     for dependency in series_dependencies:
-        gitkit_bail(
-            dependency in repo.heads,
-            f"Series dependencies {series_dependencies} have not all been closed",
-        )
+        if dependency in repo.heads:
+            raise ValueError(
+                f"Series dependencies {series_dependencies} have not all been closed"
+            )
+
+    tag = get_current_part()
+    if tag is None:
+        raise ValueError("Could not find this part's base")
 
     try:
-        tag = get_current_part()
-        gitkit_bail(tag is None, "Could not find this part's base")
-
         repo.git.rebase(tag, onto=onto)
+    except GitCommandError:
+        i = 1
+        while os.path.exists(os.path.join(repo.git_dir, "REBASE_HEAD")):
+            # rebasing in progress
+            time.sleep(i)
+            i = min(i * 1.05, 2)
+    finally:
         repo.delete_tag(tag)
-    except GitCommandError as e:
-        gitkit_bail(True, e.stderr)
 
 
 def part_stats(*, up_to: Optional[str] = None, fall_back_onto: str) -> PartStats:
-    repo = Repo(".")
+    repo = get_app_repo()
 
     part = get_current_part()
     if part is None:

@@ -3,8 +3,8 @@ from enum import Enum
 import json
 from typing import List, Optional, Set
 import uuid
-from git import GitCommandError, Repo, TagReference
-from gitkit.utils import gitkit_bail
+from git import GitCommandError, TagReference
+from gitkit.utils import get_app_repo
 
 
 class DataNodeType(int, Enum):
@@ -27,7 +27,7 @@ class PartType(int, Enum):
 def interpret_part_type(*, part_name: Optional[str] = None) -> PartType:
     from gitkit.logic.parts import is_part_name_valid
 
-    repo = Repo(".")
+    repo = get_app_repo()
 
     if part_name is None:
         part_name = repo.head.reference.name
@@ -42,7 +42,7 @@ def interpret_part_type(*, part_name: Optional[str] = None) -> PartType:
 
 
 def load_data_node(*, part_name: Optional[str] = None) -> DataNode | None:
-    repo = Repo(".")
+    repo = get_app_repo()
 
     if part_name is None:
         part_name = repo.head.reference.name
@@ -62,7 +62,7 @@ def load_data_node(*, part_name: Optional[str] = None) -> DataNode | None:
 
 
 def save_data_node(node: DataNode, tag_name: str) -> TagReference:
-    repo = Repo(".")
+    repo = get_app_repo()
 
     old_head = repo.head.reference
     node_head = repo.create_head(tag_name)
@@ -89,13 +89,13 @@ def context_tag(name: str) -> str:
 def start_series(name: str, *, exists_ok: bool = False, force: bool = False):
     from gitkit.logic.parts import make_part
 
-    repo = Repo(".")
+    repo = get_app_repo()
 
     if (already_exists := series_exists(name)) and exists_ok:
         return
 
-    if not force:
-        gitkit_bail(already_exists, f"Series {name} already exists")
+    if not force and already_exists:
+        raise ValueError(f"Series {name} already exists")
 
     series_info = DataNode(type=DataNodeType.SERIES)
 
@@ -106,7 +106,8 @@ def start_series(name: str, *, exists_ok: bool = False, force: bool = False):
         series_info.dependent_on = [repo.head.reference.name]
     elif current_part_type == PartType.CONTEXT:
         context_info = load_data_node()
-        gitkit_bail(context_info is None, "Could not find data node for this context")
+        if context_info is None:
+            raise ValueError("Could not find data node for this context")
         series_info.dependent_on = context_info.dependent_on
 
     save_data_node(series_info, series_tag(name))
@@ -115,25 +116,26 @@ def start_series(name: str, *, exists_ok: bool = False, force: bool = False):
 
 
 def series_exists(name: str) -> bool:
-    repo = Repo(".")
+    repo = get_app_repo()
     return series_tag(name) in [tag.name for tag in repo.tags]
 
 
 def create_context(other_part_name: str, *, name: Optional[str] = None) -> DataNode:
-    repo = Repo(".")
+    repo = get_app_repo()
 
     def get_dependencies(part_name: str) -> List[str]:
         part_type = interpret_part_type(part_name=part_name)
-        gitkit_bail(
-            part_type == PartType.OTHER,
-            "Cannot make context where the base is not a gitkit managed head. Try making a series instead.",
-        )
+        if part_type == PartType.OTHER:
+            raise ValueError(
+                "Cannot make context where the base is not a gitkit managed head. Try making a series instead."
+            )
 
         if part_type == PartType.PART:
             return [part_name]
         elif part_type == PartType.CONTEXT:
             node = load_data_node(part_name=part_name)
-            gitkit_bail(node is None, f"Cannot find data node for context {part_name}")
+            if node is None:
+                raise ValueError(f"Cannot find data node for context {part_name}")
             return node.dependent_on
 
         return []
@@ -167,7 +169,7 @@ def create_context(other_part_name: str, *, name: Optional[str] = None) -> DataN
 
 
 def prune_tags():
-    repo = Repo(".")
+    repo = get_app_repo()
 
     tags_to_keep: Set[str] = set()
     for head in repo.heads:
@@ -181,7 +183,10 @@ def prune_tags():
         elif part_type == PartType.CONTEXT:
             tags_to_keep.add(context_tag(head.name))
 
-    print(*(tag for tag in repo.tags if str(tag) in tags_to_keep))
-    return
-
-    repo.delete_tag(*(tag for tag in repo.tags if str(tag) not in tags_to_keep))
+    repo.delete_tag(
+        *(
+            tag
+            for tag in repo.tags
+            if tag.name not in tags_to_keep and tag.name.startswith("(gk)")
+        )
+    )
