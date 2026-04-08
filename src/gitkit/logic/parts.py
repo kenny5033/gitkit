@@ -1,6 +1,7 @@
 from base64 import b64encode
 from dataclasses import dataclass
 import os
+from pathlib import Path
 import re
 import time
 from typing import List, Optional, Tuple
@@ -15,6 +16,7 @@ part_name_regex = re.compile(r"(.*)-p(\d+(?:\.\d*)?)")
 class PartStats:
     lines_added: int
     lines_removed: int
+    files_changed: List[Path]
 
     @property
     def total_lines_changed(self) -> int:
@@ -178,7 +180,9 @@ def rebase_part(onto: str, *, context_only: bool = False):
         repo.delete_tag(tag)
 
 
-def part_stats(*, up_to: Optional[str] = None, fall_back_onto: str) -> PartStats:
+def part_stats(
+    *, up_to: Optional[str] = None, fall_back_onto: str = "origin/master"
+) -> PartStats:
     repo = get_app_repo()
 
     part = get_current_part()
@@ -191,11 +195,17 @@ def part_stats(*, up_to: Optional[str] = None, fall_back_onto: str) -> PartStats
 
     total_added = 0
     total_removed = 0
+    files_changed = []
 
     info_lines: list = diff.strip().split("\0")[:-1]
 
     for added, removed, file_name in (line.split("\t") for line in info_lines):
         total_added += int(added)
         total_removed += int(removed)
+        files_changed.append(Path(file_name))
 
-    return PartStats(lines_added=total_added, lines_removed=total_removed)
+    return PartStats(
+        lines_added=total_added,
+        lines_removed=total_removed,
+        files_changed=files_changed,
+    )
