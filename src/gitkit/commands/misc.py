@@ -1,9 +1,7 @@
 import fileinput
 from pathlib import Path
 import sys
-from typing import Annotated
-from git import Repo
-from gitkit.utils import gitkit_bail, get_app_repo, set_app_repo
+from gitkit.utils import gitkit_bail, get_app_repo
 import typer
 
 
@@ -50,8 +48,8 @@ def verify_pre_push():
         sys.exit(0)
 
     if part_type == PartType.CONTEXT:
-        gitkit_bail(True, "You cannot push a context")
+        gitkit_bail("You cannot push a context")
 
     if part_type == PartType.PART:
         if get_current_part() is not None:
-            gitkit_bail(True, "This part has yet to be rebased")
+            gitkit_bail("This part has yet to be rebased")

@@ -23,12 +23,11 @@ def get_app_repo() -> Repo:
     return _app_repo
 
 
-def gitkit_bail(assertion: bool, error_msg: str, *, okay: bool = False):
-    """If assertion is True, then print the error_msg and exit. Otherwise, do nothing"""
-    if assertion:
-        sys.stderr.write("\nGitkit encountered an error:\n")
-        sys.stderr.write(error_msg + "\n")
-        sys.exit(0 if okay else 1)
+def gitkit_bail(error_msg: str, *, okay: bool = False):
+    """Print the error_msg and exit. Otherwise, do nothing"""
+    sys.stderr.write("\nGitkit found it necessary to bail out:\n")
+    sys.stderr.write(error_msg + "\n")
+    sys.exit(0 if okay else 1)
 
 
 class RepoTester:

@@ -1,5 +1,6 @@
 import gitkit.logic.parts as logic
 from typing import Annotated, Optional
+from gitkit.utils import gitkit_bail
 import typer
 
 app = typer.Typer()
@@ -45,7 +46,23 @@ def rebase(
             help="Rebase the current part's default context ('onto' will probably be your default branch)",
         ),
     ] = False,
+    strict: Annotated[
+        bool,
+        typer.Option(
+            help="Holds you accountable",
+        ),
+    ] = True,
 ):
+    def yn_question(q: str):
+        if not input(f"(gk) {q} (y/N): ").strip().startswith("y"):
+            gitkit_bail("Have better standards!")
+
+    if strict:
+        yn_question("Did you verify each commited hunk is good to go?")
+        yn_question(
+            "Did you verify each string literal in any frontend changes is wrapped with _()?"
+        )
+
     logic.rebase_part(onto, context_only=context)
 
 

@@ -28,8 +28,10 @@ def startseries(
 )
 def nodeinfo():
     node = logic.load_data_node()
-    gitkit_bail(node is None, "Couldn't find data node for the current part")
-    print(json.dumps(asdict(node), indent=2))
+    if node is None:
+        gitkit_bail("Couldn't find data node for the current part")
+    else:  # mainly to get types feeling good
+        print(json.dumps(asdict(node), indent=2))
 
 
 @app.command(
