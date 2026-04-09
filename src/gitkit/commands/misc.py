@@ -2,9 +2,10 @@ import fileinput
 from pathlib import Path
 import sys
 import textwrap
-from typing import Dict, List
+from typing import Dict, List, Optional
 from gitkit.utils import gitkit_bail, get_app_repo
 import typer
+from pynput import keyboard
 
 
 app = typer.Typer()
@@ -57,50 +58,89 @@ def verify_pre_push():
             gitkit_bail("This part has yet to be rebased")
 
 
-@verify_app.command(help="Check your added lines for any silliness")
+@verify_app.command(help="Check your hunks for any silliness")
 def check_changes():
     from gitkit.logic.parts import part_stats
 
     repo = get_app_repo()
     stats = part_stats()
 
-    hunks_by_file: Dict[str, List[List[str]]] = {}
-    for file in stats.files_changed:
-        hunks_by_file[str(file)] = []
+    class Hunk(List):
+        pass
 
-        diff: str = repo.git.diff("origin/master", file)
+    def parse_hunks(diff: str) -> List[Hunk]:
+        res = []
+        current_hunk = Hunk()
         in_hunk = False
-        current_hunk = []
-        for line in diff.split("\n"):
-            if not in_hunk:
-                current_hunk = []
 
-            if line.startswith("+ ") or line.startswith("- "):
+        for line in diff.split("\n"):
+            if line.isspace() or line.startswith("++") or line.startswith("--"):
+                continue
+
+            if line.startswith("+") or line.startswith("-"):
                 in_hunk = True
                 current_hunk.append(line)
             elif in_hunk:
+                res.append(current_hunk)
+                current_hunk = Hunk()
                 in_hunk = False
-                hunks_by_file[str(file)].append(current_hunk)
 
-    for file_name, hunks in hunks_by_file.items():
-        lines = ["*" * 10, f"** {file_name}", "*" * 10]
-        for i, hunk in enumerate(hunks):
-            lines.append(f"({i})")
+        return res
 
-            # move + or - to end for dedentation
-            hunk_text = "\n".join([line[1:] + line[0] for line in hunk])
-            hunk_text = textwrap.dedent(hunk_text)
-            processed_hunk_lines = []
-            for line in hunk_text.split("\n"):
-                new_line = ""
-                if line.endswith("+"):
-                    new_line = f"\x1b[32;49m{line.removesuffix('+')}"
-                else:
-                    new_line = f"\x1b[31;49m{line.removesuffix('-')}"
+    hunks_by_file: Dict[str, List[Hunk]] = {}
+    for file in stats.files_changed:
+        diff: str = repo.git.diff("origin/master", file)
+        hunks_by_file[str(file)] = parse_hunks(diff)
 
-                processed_hunk_lines.append(f"{new_line}\x1b[39;49m")
+    def hunk_display_lines(hunk: Hunk) -> List[str]:
+        # move + or - to end for dedentation
+        hunk_text = "\n".join([line[1:] + line[0] for line in hunk])
+        hunk_text = textwrap.dedent(hunk_text)
 
-            lines.extend(processed_hunk_lines)
-            lines.append("")
+        lines = []
+        for line in hunk_text.split("\n"):
+            if line.endswith("+"):
+                lines.append(f"\x1b[32;49m{line.removesuffix('+')}\x1b[0m")
+            else:
+                lines.append(f"\x1b[31;49m{line.removesuffix('-')}\x1b[0m")
 
-        print("\n".join(lines))
+        return lines
+
+    hunks_to_view = [
+        (file_name, hunk)
+        for file_name, hunks in hunks_by_file.items()
+        for hunk in hunks
+    ]
+    i = 0
+    force_exit = False
+
+    def on_press(key: Optional[keyboard.Key | keyboard.KeyCode]):
+        if type(key) is keyboard.Key:
+            if key == keyboard.Key.esc:
+                nonlocal force_exit
+                force_exit = True
+                return False
+
+        if type(key) is keyboard.KeyCode:
+            nonlocal i
+            if key.char == "n":
+                i += 1
+                return False
+            elif key.char == "N":
+                if i > 0:
+                    i -= 1
+                return False
+
+    while i < len(hunks_to_view) and not force_exit:
+        file_name, hunk = hunks_to_view[i]
+
+        with keyboard.Listener(on_press=on_press) as listener:
+            print("\x1bc")
+
+            print(f"({i + 1}/ {len(hunks_to_view)})")
+            print(f"** {file_name} **")
+            for line in hunk_display_lines(hunk):
+                print(line)
+
+            print("ESC to exit")
+            listener.join()
