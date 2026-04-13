@@ -1,5 +1,6 @@
+from gitkit.commands.misc import check_changes
 import gitkit.logic.parts as logic
-from typing import Annotated, Optional
+from typing import Annotated, Callable, Optional
 from gitkit.utils import gitkit_bail
 import typer
 
@@ -53,12 +54,18 @@ def rebase(
         ),
     ] = True,
 ):
-    def yn_question(q: str):
-        if not input(f"(gk) {q} (y/N): ").strip().startswith("y"):
-            gitkit_bail("Have better standards!")
-
     if strict:
-        yn_question("Did you verify each commited hunk is good to go?")
+
+        def yn_question(q: str, *, on_no: Optional[Callable[..., None]] = None):
+            if not input(f"(gk) {q} (y/N): ").strip().startswith("y"):
+                if on_no is not None:
+                    on_no()
+                gitkit_bail("Have better standards!")
+
+        yn_question(
+            "Did you verify each commited hunk is good to go?",
+            on_no=check_changes,
+        )
         yn_question(
             "Did you verify each string literal in any frontend changes is wrapped with _()?"
         )

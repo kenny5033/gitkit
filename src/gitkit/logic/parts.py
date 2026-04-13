@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import List, Optional, Tuple
+from typing import Collection, List, Optional, Tuple
 from git import GitCommandError, Head, Repo, TagReference
 from gitkit.utils import get_app_repo
 
@@ -197,9 +197,22 @@ def part_stats(
     total_removed = 0
     files_changed = []
 
-    info_lines: list = diff.strip().split("\0")[:-1]
+    parsed_info = []
+    for line in diff.strip().split("\0")[:-1]:
+        parsed_info.extend(line.split("\t"))
 
-    for added, removed, file_name in (line.split("\t") for line in info_lines):
+    info_lines: List[Tuple[str, str, str]] = []
+    i = 0
+    while i < len(parsed_info):
+        chunk: Collection[str] = parsed_info[i : i + 3]
+        i += 3
+        if chunk[2] == "":
+            chunk[2] = parsed_info[i + 2]
+            i += 2
+
+        info_lines.append(chunk)
+
+    for added, removed, file_name in info_lines:
         total_added += int(added)
         total_removed += int(removed)
         files_changed.append(Path(file_name))

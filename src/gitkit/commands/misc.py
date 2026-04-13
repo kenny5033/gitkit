@@ -1,4 +1,5 @@
 import fileinput
+import os
 from pathlib import Path
 import sys
 import textwrap
@@ -89,7 +90,7 @@ def check_changes():
 
     hunks_by_file: Dict[str, List[Hunk]] = {}
     for file in stats.files_changed:
-        diff: str = repo.git.diff("origin/master", file)
+        diff: str = repo.git.diff("origin/master", "--", file)
         hunks_by_file[str(file)] = parse_hunks(diff)
 
     def hunk_display_lines(hunk: Hunk) -> List[str]:
