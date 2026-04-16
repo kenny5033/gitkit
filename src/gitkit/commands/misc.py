@@ -1,4 +1,5 @@
 import fileinput
+from itertools import batched
 import os
 from pathlib import Path
 import sys
@@ -66,7 +67,7 @@ def check_changes():
     repo = get_app_repo()
     stats = part_stats()
 
-    class Hunk(List):
+    class Hunk(List[str]):
         pass
 
     def parse_hunks(diff: str) -> List[Hunk]:
@@ -86,6 +87,10 @@ def check_changes():
                 current_hunk = Hunk()
                 in_hunk = False
 
+        # append the last hunk, if meaningful
+        if len(current_hunk) > 0:
+            res.append(current_hunk)
+
         return res
 
     hunks_by_file: Dict[str, List[Hunk]] = {}
@@ -93,25 +98,52 @@ def check_changes():
         diff: str = repo.git.diff("origin/master", "--", file)
         hunks_by_file[str(file)] = parse_hunks(diff)
 
-    def hunk_display_lines(hunk: Hunk) -> List[str]:
+    def dedented_hunk_lines(hunk: Hunk) -> List[str]:
         # move + or - to end for dedentation
         hunk_text = "\n".join([line[1:] + line[0] for line in hunk])
         hunk_text = textwrap.dedent(hunk_text)
+        return hunk_text.split("\n")
 
-        lines = []
-        for line in hunk_text.split("\n"):
-            if line.endswith("+"):
-                lines.append(f"\x1b[32;49m{line.removesuffix('+')}\x1b[0m")
-            else:
-                lines.append(f"\x1b[31;49m{line.removesuffix('-')}\x1b[0m")
+    class Piece(List[str]):
+        pass
 
-        return lines
+    def parse_pieces_from_hunk(hunk: Hunk) -> List[Piece]:
+        formatted_hunk_lines = dedented_hunk_lines(hunk)
 
-    hunks_to_view = [
-        (file_name, hunk)
+        if len(formatted_hunk_lines) < 15:
+            return [Piece(formatted_hunk_lines)]
+
+        clean_pieces = []
+        piece = Piece()
+        for line in formatted_hunk_lines:
+            if line.isspace():
+                clean_pieces.append(piece)
+                piece = Piece()
+                continue
+
+            piece.append(line)
+
+        # append the last piece, if meaningful
+        if len(piece) > 0:
+            clean_pieces.append(piece)
+
+        pieces = []
+        for clean_piece in clean_pieces:
+            if len(clean_piece) > 25:
+                pieces.extend(batched(clean_piece, 15))
+                continue
+
+            pieces.append(clean_piece)
+
+        return pieces
+
+    pieces_to_view = [
+        (file_name, piece)
         for file_name, hunks in hunks_by_file.items()
         for hunk in hunks
+        for piece in parse_pieces_from_hunk(hunk)
     ]
+
     i = 0
     force_exit = False
 
@@ -132,15 +164,30 @@ def check_changes():
                     i -= 1
                 return False
 
-    while i < len(hunks_to_view) and not force_exit:
-        file_name, hunk = hunks_to_view[i]
+    def color_piece(piece: Piece) -> Piece:
+        colored_piece = Piece()
+
+        for line in piece:
+            if line.endswith("+"):
+                ansi_prefix = "\x1b[32;49m"
+                adjusted_line = line.removesuffix("+")
+            else:
+                ansi_prefix = "\x1b[31;49m"
+                adjusted_line = line.removesuffix("-")
+
+            colored_piece.append(f"{ansi_prefix}{adjusted_line}\x1b[0m")
+
+        return colored_piece
+
+    while i < len(pieces_to_view) and not force_exit:
+        file_name, piece = pieces_to_view[i]
 
         with keyboard.Listener(on_press=on_press) as listener:
             print("\x1bc")
 
-            print(f"({i + 1}/ {len(hunks_to_view)})")
+            print(f"({i + 1}/ {len(pieces_to_view)})")
             print(f"** {file_name} **")
-            for line in hunk_display_lines(hunk):
+            for line in color_piece(piece):
                 print(line)
 
             print("ESC to exit")
