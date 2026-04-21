@@ -88,7 +88,7 @@ def make_part(
     if part <= prev_part:
         raise ValueError("The new part must come after the current part")
 
-    # ensure the part name is availabled
+    # ensure the part name is available
     part_name = generate_part_name(series_name, part)
     if part_name in [head.name for head in repo.heads]:
         raise ValueError("This part already exists")
@@ -106,7 +106,10 @@ def make_part(
 
         repo.delete_head(tmp_head)
     else:
+        prev_part_base = get_current_part()
         new_branch.checkout()
+        if int(part) == int(prev_part) and prev_part_base is not None:
+            repo.git.reset("--hard", f"{prev_part_base.name}^")
         construct_base(series_name, part)
 
 
