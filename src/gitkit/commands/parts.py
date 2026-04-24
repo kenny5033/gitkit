@@ -1,7 +1,5 @@
-from gitkit.commands.misc import check_changes
 import gitkit.logic.parts as logic
-from typing import Annotated, Callable, Optional
-from gitkit.utils import gitkit_bail
+from typing import Annotated, Optional
 import typer
 
 app = typer.Typer()
@@ -47,29 +45,7 @@ def rebase(
             help="Rebase the current part's default context ('onto' will probably be your default branch)",
         ),
     ] = False,
-    strict: Annotated[
-        bool,
-        typer.Option(
-            help="Holds you accountable",
-        ),
-    ] = True,
 ):
-    if strict:
-
-        def yn_question(q: str, *, on_no: Optional[Callable[..., None]] = None):
-            if not input(f"(gk) {q} (y/N): ").strip().startswith("y"):
-                if on_no is not None:
-                    on_no()
-                gitkit_bail("Have better standards!")
-
-        yn_question(
-            "Did you verify each commited hunk is good to go?",
-            on_no=check_changes,
-        )
-        yn_question(
-            "Did you verify each string literal in any frontend changes is wrapped with _()?"
-        )
-
     logic.rebase_part(onto, context_only=context)
 
 

@@ -175,8 +175,8 @@ def rebase_part(onto: str, *, context_only: bool = False):
         repo.git.rebase(tag, onto=onto)
     except GitCommandError:
         i = 1
+        print("(gk) Please fix rebase errors. I'll wait.")
         while os.path.exists(os.path.join(repo.git_dir, "REBASE_HEAD")):
-            # rebasing in progress
             time.sleep(i)
             i = min(i * 1.05, 2)
     finally:

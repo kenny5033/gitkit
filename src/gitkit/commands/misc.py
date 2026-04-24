@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 import textwrap
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from gitkit.utils import gitkit_bail, get_app_repo
 import typer
 from pynput import keyboard
@@ -192,3 +192,36 @@ def check_changes():
 
             print("ESC to exit")
             listener.join()
+
+
+@verify_app.command(help="A series of y/n questions to answer before pushing")
+def accountability():
+    def yn_question(
+        q: str,
+        *,
+        on_yes: Callable[..., None] = lambda: None,
+        on_no: Callable[..., None] = lambda: None,
+    ):
+        yes = input(f"(gk) {q} (y/N): ").strip().startswith("y")
+
+        if yes:
+            on_yes()
+        else:
+            on_no()
+
+    def common_on_no():
+        gitkit_bail("Have better standards!")
+
+    yn_question(
+        "Did you verify each commited hunk is good to go?",
+        on_no=check_changes,
+    )
+    yn_question(
+        "Did you verify each string literal in any frontend changes is wrapped with _()?",
+        on_no=common_on_no,
+    )
+    yn_question("Did you gitkit rebase?", on_no=common_on_no)
+    yn_question("Did you make migrations?", on_no=common_on_no)
+    yn_question("Did you merge multiple migrations?", on_no=common_on_no)
+
+    print("\n(gk) You're good to go!")
